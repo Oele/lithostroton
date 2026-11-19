@@ -1,0 +1,31 @@
+[package]
+name = "lithostroton-sdk-check"
+description = "Checks lithostroton with independent clients: matrix-rust-sdk's OAuth client and the oauth2 crate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+lithostroton = { path = "../../crates/lithostroton", features = ["testing"] }
+matrix-sdk = { version = "=0.19.1", default-features = false }
+ruma = "0.17"
+oauth2 = { version = "5", default-features = false }
+oauth2-reqwest = { version = "=0.1.0-alpha.3", default-features = false }
+reqwest = { version = "0.13", default-features = false }
+# reqwest 0.13 is built here without a crypto provider: ring, installed at start
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+# the lab is served over https with a throwaway certificate: the clients refuse http
+# revocation endpoints, rightly
+axum-server = { version = "0.9", default-features = false, features = ["tls-rustls-ring"] }
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+axum.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+url.workspace = true
+form_urlencoded.workspace = true
+anyhow = "1"
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[lints]
+workspace = true

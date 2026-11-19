@@ -34,6 +34,16 @@
 //! | `login`, `logout`, `register`             | sign-in pages                          |
 //! | `consent`                                 | consent page of the authorization code |
 //! | `link`                                    | verification URI of the device grant   |
+//! | `rendezvous/{id}`                         | an MSC4108 (2024) rendezvous session   |
+//!
+//! [`Embedded::client_router`] has the rendezvous endpoints of sign-in with a QR code, at
+//! their paths of the Client-Server API, for the homeserver to merge into its own routes:
+//!
+//! | path                                                      | what                       |
+//! |-----------------------------------------------------------|----------------------------|
+//! | `/_matrix/client/v1/rendezvous`, `…/{id}`, `…/{id}/{txn}` | MSC4388                    |
+//! | `/_matrix/client/unstable/io.element.msc4388/rendezvous…` | MSC4388, unstable prefix   |
+//! | `/_matrix/client/unstable/org.matrix.msc4108/rendezvous`  | MSC4108 (2024), creation   |
 //!
 //! # Security
 //!
@@ -63,6 +73,7 @@ mod login;
 mod metadata;
 mod pages;
 mod ratelimit;
+mod rendezvous;
 mod revoke;
 mod scope;
 mod session;
@@ -74,7 +85,9 @@ mod token;
 pub mod testing;
 
 pub use clock::Clock;
-pub use config::{Config, ConfigError, Lifetimes, RateLimit, RateLimits};
+pub use config::{
+    Config, ConfigError, Lifetimes, RateLimit, RateLimits, RendezvousConfig, RendezvousCreate,
+};
 pub use embed::{Embedded, StartError};
 pub use host::{
     Availability, Device, Host, HostError, NewSession, NewUser, Session, TokenKind, TokenStatus,

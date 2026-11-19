@@ -30,6 +30,8 @@ pub struct Config {
     /// default. Turn it off if the host adds the same headers to everything it serves:
     /// a response with the header twice is refused by browsers.
     pub cors: bool,
+    /// The rendezvous of sign-in with a QR code ([`crate::Embedded::client_router`]).
+    pub rendezvous: RendezvousConfig,
     pub lifetimes: Lifetimes,
     pub rate_limits: RateLimits,
     /// Where lithostroton reads the time.
@@ -46,9 +48,44 @@ impl Config {
             registration: false,
             device_authorization: true,
             cors: true,
+            rendezvous: RendezvousConfig::default(),
             lifetimes: Lifetimes::default(),
             rate_limits: RateLimits::default(),
             clock: Clock::system(),
+        }
+    }
+}
+
+/// Who may create a rendezvous session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RendezvousCreate {
+    /// Anyone, with or without an access token: a new device that is not signed in yet can
+    /// put up a QR code. Rate limits and the cap on sessions bound the abuse.
+    Anyone,
+    /// Only a request with a working access token ([`crate::Host::authenticate`]).
+    SignedIn,
+}
+
+/// The rendezvous of sign-in with a QR code (MSC4388, and the 2024 revision of MSC4108).
+#[derive(Clone, Debug)]
+pub struct RendezvousConfig {
+    /// Whether the rendezvous endpoints answer. On by default.
+    pub enabled: bool,
+    /// Who may create a session. [`RendezvousCreate::Anyone`] by default.
+    pub create: RendezvousCreate,
+    /// How long a session lives. Five minutes, the most MSC4388 recommends.
+    pub lifetime: Duration,
+    /// How many sessions may exist at once. 10 000.
+    pub max_sessions: usize,
+}
+
+impl Default for RendezvousConfig {
+    fn default() -> RendezvousConfig {
+        RendezvousConfig {
+            enabled: true,
+            create: RendezvousCreate::Anyone,
+            lifetime: Duration::from_secs(300),
+            max_sessions: 10_000,
         }
     }
 }
@@ -118,6 +155,10 @@ pub struct RateLimits {
     pub account_creation_per_address: RateLimit,
     /// Revocation requests per client address.
     pub revocation_per_address: RateLimit,
+    /// Rendezvous requests per client address (two devices poll about once a second each).
+    pub rendezvous_per_address: RateLimit,
+    /// Rendezvous sessions created per client address.
+    pub rendezvous_create_per_address: RateLimit,
 }
 
 impl Default for RateLimits {
@@ -132,6 +173,8 @@ impl Default for RateLimits {
             user_code_per_address: RateLimit::new(10, s(6)),
             account_creation_per_address: RateLimit::new(3, s(600)),
             revocation_per_address: RateLimit::new(50, s(1)),
+            rendezvous_per_address: RateLimit::new(120, Duration::from_millis(200)),
+            rendezvous_create_per_address: RateLimit::new(10, s(6)),
         }
     }
 }
@@ -193,6 +236,7 @@ impl Config {
             (l.device_code, "the device code lifetime"),
             (l.device_poll_interval, "the device poll interval"),
             (l.browser_session, "the browser session lifetime"),
+            (self.rendezvous.lifetime, "the rendezvous session lifetime"),
         ] {
             if d.is_zero() {
                 return Err(ConfigError::Lifetime(name));

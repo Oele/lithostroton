@@ -10,6 +10,7 @@ use crate::{
     config::{Config, Issuer},
     host::Host,
     ratelimit::Limiter,
+    rendezvous::Sessions,
     store::{Store, Typed},
 };
 
@@ -26,6 +27,8 @@ pub(crate) struct Inner {
     /// When each device code was last polled, and the interval it is held to (raised by
     /// `slow_down`), by the device code's store key.
     pub polls: Mutex<HashMap<String, Poll>>,
+    /// The rendezvous sessions of sign-in with a QR code.
+    pub rendezvous: Sessions,
 }
 
 pub(crate) struct Limits {
@@ -37,6 +40,8 @@ pub(crate) struct Limits {
     pub user_code: Limiter,
     pub account_creation: Limiter,
     pub revocation: Limiter,
+    pub rendezvous: Limiter,
+    pub rendezvous_create: Limiter,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -65,6 +70,8 @@ impl Inner {
             user_code: Limiter::new(r.user_code_per_address, c()),
             account_creation: Limiter::new(r.account_creation_per_address, c()),
             revocation: Limiter::new(r.revocation_per_address, c()),
+            rendezvous: Limiter::new(r.rendezvous_per_address, c()),
+            rendezvous_create: Limiter::new(r.rendezvous_create_per_address, c()),
         };
         Inner {
             config,
@@ -74,6 +81,7 @@ impl Inner {
             key,
             limits,
             polls: Mutex::new(HashMap::new()),
+            rendezvous: Sessions::default(),
         }
     }
 
@@ -95,9 +103,11 @@ impl Inner {
         format!("{}{rel}", self.issuer.path)
     }
 
-    /// Forgets the poll records of device codes that have expired.
-    pub fn prune_polls(&self) {
+    /// Forgets the poll records of device codes that have expired, and the rendezvous
+    /// sessions that have.
+    pub fn prune(&self) {
         let now = self.now();
+        self.rendezvous.prune(now);
         self.polls
             .lock()
             .unwrap_or_else(|e| e.into_inner())

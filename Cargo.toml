@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["crates/lithostroton"]
+members = ["crates/lithostroton", "tests/sdk-check"]
+# tests/sdk-check builds matrix-sdk: only when asked for (`cargo run -p lithostroton-sdk-check`)
+default-members = ["crates/lithostroton"]
 
 [workspace.package]
 version = "0.1.0"

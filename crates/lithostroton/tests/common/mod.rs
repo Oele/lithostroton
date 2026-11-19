@@ -94,7 +94,9 @@ impl Lab {
         let embedded = Embedded::start(config, host.clone(), store.clone())
             .await
             .unwrap();
-        let app = Router::new().nest(PREFIX, embedded.router());
+        let app = Router::new()
+            .nest(PREFIX, embedded.router())
+            .merge(embedded.client_router());
         Lab {
             app,
             host,
@@ -151,6 +153,15 @@ impl Lab {
             req = req.header(*k, *v);
         }
         self.request(req.body(Body::from(body)).unwrap()).await
+    }
+
+    pub async fn send(&self, method: &str, p: &str, headers: &[(&str, &str)], body: &str) -> Resp {
+        let mut req = Request::builder().method(method).uri(self.path(p));
+        for (k, v) in headers {
+            req = req.header(*k, *v);
+        }
+        self.request(req.body(Body::from(body.to_owned())).unwrap())
+            .await
     }
 
     pub async fn post_json(&self, p: &str, body: &Value) -> Resp {

@@ -26,9 +26,12 @@ authorization side of it.
   unstable MSC2967 forms.
 - Sign-in, registration and consent pages in plain, accessible HTML without scripts. The
   client's name and website are shown as unverified.
+- The rendezvous of sign-in with a QR code: MSC4388 (`/_matrix/client/v1/rendezvous` and
+  `io.element.msc4388`), and the 2024 revision of MSC4108 that released matrix-rust-sdk
+  versions speak (`org.matrix.msc4108`).
 
-Planned: the rendezvous of sign-in with a QR code (MSC4388, used by MSC4108), and the account
-management pages (sessions, display name, password, cross-signing reset).
+Planned: the account management pages (sessions, display name, password, cross-signing
+reset).
 
 ## How it fits in a homeserver
 
@@ -54,8 +57,22 @@ let app = axum::Router::new()
     ;
 ```
 
+`Embedded::client_router()` has the rendezvous endpoints at their `/_matrix/client/...` paths,
+for the homeserver to merge into its own routes.
+
 `lithostroton::testing` (feature `testing`) has an in-memory `Host` and `check_host`, a suite
 of checks a homeserver can run against its own `Host` implementation.
+
+## Tests
+
+`cargo test` runs the unit and integration tests (an in-memory host, a browser with a cookie
+jar, the clients' side of every flow, and the security rules below).
+
+`cargo run -p lithostroton-sdk-check` checks lithostroton with clients written by others:
+matrix-rust-sdk's OAuth client (registration, authorization code, refresh, logout) and the
+`oauth2` crate's device authorization grant, against an in-process lab served over https. With
+`--homeserver URL --user NAME --password PASSWORD` it runs against a homeserver that embeds
+lithostroton.
 
 ## Security
 

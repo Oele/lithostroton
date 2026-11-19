@@ -293,7 +293,10 @@ fn common_headers(r: &Resp) -> String {
         assert!(r.header(h).is_some(), "{h} missing");
     }
     assert!(r.header("expires").unwrap().ends_with(" GMT"));
-    assert_eq!(r.header("cache-control").as_deref(), Some("no-store"));
+    assert_eq!(
+        r.header("cache-control").as_deref(),
+        Some("no-store, no-transform")
+    );
     assert_eq!(r.header("pragma").as_deref(), Some("no-cache"));
     assert!(
         r.header("access-control-expose-headers")
@@ -377,11 +380,20 @@ async fn msc4108_exchange() {
         .send(
             "PUT",
             &url,
-            &[("content-type", "text/plain"), ("if-match", "W/\"weak\"")],
+            &[("content-type", "text/plain"), ("if-match", "*")],
             "x",
         )
         .await;
     matrix_error(&r, StatusCode::BAD_REQUEST, "M_INVALID_PARAM");
+    let r = lab
+        .send(
+            "PUT",
+            &url,
+            &[("content-type", "text/plain"), ("if-match", "W/\"other\"")],
+            "x",
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::PRECONDITION_FAILED);
     let r = lab
         .send(
             "PUT",
@@ -391,6 +403,34 @@ async fn msc4108_exchange() {
         )
         .await;
     matrix_error(&r, StatusCode::PAYLOAD_TOO_LARGE, "M_TOO_LARGE");
+
+    // through a proxy that compresses text/plain (nginx's gzip): the client gets our tag
+    // marked weak and sends it back so
+    let weak = format!("W/{etag2}");
+    let r = lab.send("GET", &url, &[("if-none-match", &weak)], "").await;
+    assert_eq!(r.status, StatusCode::NOT_MODIFIED);
+    let r = lab
+        .send(
+            "PUT",
+            &url,
+            &[("content-type", "text/plain"), ("if-match", &weak)],
+            "message two",
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.body);
+    let etag3 = common_headers(&r);
+    // and the version it named is gone: one writer per version, weak or not
+    let r = lab
+        .send(
+            "PUT",
+            &url,
+            &[("content-type", "text/plain"), ("if-match", &weak)],
+            "late",
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::PRECONDITION_FAILED);
+    assert_eq!(common_headers(&r), etag3);
+    assert_eq!(lab.get(&url).await.body, "message two");
 
     // not reachable as an MSC4388 session
     let id = url.rsplit('/').next().unwrap();

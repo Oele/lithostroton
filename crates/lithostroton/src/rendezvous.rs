@@ -447,7 +447,11 @@ fn common_headers(h: &mut HeaderMap, etag: &str, expires: SystemTime, modified: 
     set(h, header::ETAG, etag);
     set(h, header::EXPIRES, &http_date(expires));
     set(h, header::LAST_MODIFIED, &http_date(modified));
-    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    // no-transform: proxies that follow RFC 9111 leave the payload and its tag alone
+    h.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, no-transform"),
+    );
     h.insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
     h.insert(
         header::ACCESS_CONTROL_EXPOSE_HEADERS,
@@ -541,10 +545,17 @@ pub(crate) async fn create_4108(
     }
 }
 
-/// An `ETag` as sent back in `If-Match` or `If-None-Match`: strong and single.
+/// An `ETag` as sent back in `If-Match` or `If-None-Match`: a single one, strong or weak.
+///
+/// RFC 9110 has `If-Match` compare strongly, so a weak tag would never match. But a proxy
+/// that compresses the `text/plain` payload marks our tag weak (nginx's gzip does, whatever
+/// `Cache-Control: no-transform` says), and clients send back the tag they got. Each version of
+/// a payload has its own random tag, and the payload under a tag never changes, so the weak
+/// form names the same version and compare-and-swap holds: `W/"x"` matches `"x"`.
 fn etag_matches(sent: &HeaderValue, current: &str) -> Option<bool> {
     let s = sent.to_str().ok()?.trim();
-    if s.starts_with("W/") || s.contains(',') || s == "*" {
+    let s = s.strip_prefix("W/").unwrap_or(s);
+    if s.contains(',') || s == "*" {
         return None;
     }
     let bare = |e: &str| e.trim_matches('"').to_owned();
@@ -635,7 +646,7 @@ pub(crate) async fn send_4108(
             return error_4108(
                 StatusCode::BAD_REQUEST,
                 "M_INVALID_PARAM",
-                "If-Match must be one strong ETag.",
+                "If-Match must be one ETag.",
             );
         }
         Some(false) => {
@@ -750,10 +761,16 @@ mod tests {
             etag_matches(&HeaderValue::from_static("\"abd\""), cur),
             Some(false)
         );
+        // as a compressing proxy marks it
         assert_eq!(
             etag_matches(&HeaderValue::from_static("W/\"abc\""), cur),
-            None
+            Some(true)
         );
+        assert_eq!(
+            etag_matches(&HeaderValue::from_static("W/\"abd\""), cur),
+            Some(false)
+        );
+        assert_eq!(etag_matches(&HeaderValue::from_static("*"), cur), None);
         assert_eq!(
             etag_matches(&HeaderValue::from_static("\"a\", \"b\""), cur),
             None

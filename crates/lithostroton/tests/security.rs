@@ -636,16 +636,100 @@ async fn token_requests_are_rate_limited_and_refreshes_get_503() {
     assert_oauth_error(&r, StatusCode::TOO_MANY_REQUESTS, "rate_limited");
 }
 
+/// A device authorization request; the `verification_uri_complete` path, from the issuer.
+async fn pending_device(lab: &Lab, client_id: &str) -> String {
+    let r = lab
+        .post_form(
+            "oauth2/device",
+            &[("client_id", client_id), ("scope", &scope("QRDEV"))],
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    let uri = r.json()["verification_uri_complete"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    uri.strip_prefix(ISSUER).unwrap().to_owned()
+}
+
 #[tokio::test]
 async fn user_code_guessing_is_rate_limited() {
     let lab = Lab::new().await;
+    let client_id = lab.register_web().await;
     let mut b = lab.browser();
+    // right codes cost nothing: devices signed in one after another in a test run
+    let right = pending_device(&lab, &client_id).await;
+    let r = b.get(&right).await;
+    let r = b.login(&r.location(), "alice", PASSWORD).await;
+    assert_eq!(r.status, StatusCode::SEE_OTHER);
+    for _ in 0..30 {
+        let r = b.get(&right).await;
+        assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    }
     for _ in 0..10 {
         let r = b.get("link?code=BBBB-BBBB").await;
         assert_eq!(r.status, StatusCode::NOT_FOUND);
     }
     let r = b.get("link?code=BBBB-BBBB").await;
     assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
+    // and while the limit is reached, a right code is not looked up either: else the answer
+    // would tell a guesser which code was right
+    let r = b.get(&right).await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
+    lab.clock.advance(Duration::from_secs(6));
+    let r = b.get(&right).await;
+    assert_eq!(r.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn user_code_guessing_by_post_is_rate_limited() {
+    let lab = Lab::new().await;
+    let client_id = lab.register_web().await;
+    let mut b = lab.browser();
+    let right = pending_device(&lab, &client_id).await;
+    let r = b.get(&right).await;
+    b.login(&r.location(), "alice", PASSWORD).await;
+    let page = b.get(&right).await;
+    let form = page
+        .body
+        .split("action=\"/_lithostroton/link\"")
+        .nth(1)
+        .unwrap();
+    let csrf = hidden_in(form, "csrf").unwrap();
+    // a signed-in user with a valid form token, posting codes that are not theirs
+    for _ in 0..10 {
+        let r = b
+            .post(
+                "link",
+                &[("csrf", &csrf), ("code", "BBBBBBBB"), ("action", "allow")],
+            )
+            .await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND, "{}", r.body);
+    }
+    let code = right.split("code=").nth(1).unwrap();
+    let r = b
+        .post(
+            "link",
+            &[("csrf", &csrf), ("code", code), ("action", "allow")],
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS, "{}", r.body);
+}
+
+#[tokio::test]
+async fn rate_limits_can_be_turned_off_for_test_labs() {
+    let lab = Lab::with(|c| c.rate_limits = lithostroton::RateLimits::unlimited()).await;
+    let mut b = lab.browser();
+    for _ in 0..50 {
+        let r = b.get("link?code=BBBB-BBBB").await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND);
+    }
+    for _ in 0..30 {
+        let r = b.login("login", "alice", "wrong password").await;
+        assert!(r.body.contains("Wrong username or password"), "{}", r.body);
+    }
+    let r = b.login("login", "alice", PASSWORD).await;
+    assert_eq!(r.status, StatusCode::SEE_OTHER);
 }
 
 #[tokio::test]

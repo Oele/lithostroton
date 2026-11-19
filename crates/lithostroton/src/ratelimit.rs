@@ -35,8 +35,35 @@ impl Limiter {
     /// Takes one token for `key`: `Ok` if there was one, `Err(wait)` with the time until there
     /// is one.
     pub fn check(&self, key: &str) -> Result<(), Duration> {
+        self.with_bucket(key, |tokens| {
+            if tokens >= 1.0 {
+                (tokens - 1.0, true)
+            } else {
+                (tokens, false)
+            }
+        })
+    }
+
+    /// Whether `key` has a token, without taking it: for requests that cost a token only
+    /// when they fail, which [`Limiter::charge`] takes afterwards.
+    pub fn peek(&self, key: &str) -> Result<(), Duration> {
+        self.with_bucket(key, |tokens| (tokens, tokens >= 1.0))
+    }
+
+    /// Takes a token for `key` after the fact. The bucket may go below zero, so that requests
+    /// [`Limiter::peek`] let through at the same time all count.
+    pub fn charge(&self, key: &str) {
+        let _ = self.with_bucket(key, |tokens| (tokens - 1.0, true));
+    }
+
+    /// Refills `key`'s bucket and applies `f` to its tokens; `f` gives the new count and whether
+    /// the request may go ahead.
+    fn with_bucket(&self, key: &str, f: impl FnOnce(f64) -> (f64, bool)) -> Result<(), Duration> {
+        if self.limit.every.is_zero() {
+            return Ok(());
+        }
         let burst = f64::from(self.limit.burst.max(1));
-        let every = self.limit.every.as_secs_f64().max(1e-6);
+        let every = self.limit.every.as_secs_f64();
         let now = self.clock.now();
         let mut buckets = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
         if buckets.len() >= PRUNE_AT {
@@ -46,13 +73,12 @@ impl Limiter {
             tokens: burst,
             at: now,
         });
-        let tokens = refill(b, now, every, burst);
+        let (tokens, ok) = f(refill(b, now, every, burst));
+        b.tokens = tokens;
         b.at = now;
-        if tokens >= 1.0 {
-            b.tokens = tokens - 1.0;
+        if ok {
             Ok(())
         } else {
-            b.tokens = tokens;
             Err(Duration::from_secs_f64((1.0 - tokens) * every))
         }
     }
@@ -103,6 +129,36 @@ mod tests {
         *now.lock().unwrap() += Duration::from_secs(10);
         assert!(l.check("a").is_ok());
         assert!(l.check("a").is_err());
+    }
+
+    #[test]
+    fn peek_and_charge() {
+        let now = Arc::new(Mutex::new(SystemTime::UNIX_EPOCH));
+        let n = now.clone();
+        let clock = Clock::from_fn(move || *n.lock().unwrap());
+        let l = Limiter::new(RateLimit::new(2, Duration::from_secs(10)), clock);
+        for _ in 0..5 {
+            assert!(l.peek("a").is_ok(), "peeking takes nothing");
+        }
+        // three requests let through at once all count: the bucket owes one
+        l.charge("a");
+        l.charge("a");
+        l.charge("a");
+        assert!(l.peek("a").is_err());
+        *now.lock().unwrap() += Duration::from_secs(10);
+        assert!(l.peek("a").is_err(), "the debt is paid first");
+        *now.lock().unwrap() += Duration::from_secs(10);
+        assert!(l.peek("a").is_ok());
+    }
+
+    #[test]
+    fn zero_interval_is_no_limit() {
+        let l = Limiter::new(RateLimit::unlimited(), Clock::system());
+        for _ in 0..10_000 {
+            assert!(l.check("a").is_ok());
+        }
+        l.charge("a");
+        assert!(l.peek("a").is_ok());
     }
 
     #[test]

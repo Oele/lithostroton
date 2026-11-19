@@ -339,7 +339,9 @@ pub(crate) async fn link_form(
     let Some(typed) = q.code.filter(|c| !c.is_empty() && c.len() <= 64) else {
         return code_entry_page(&state, None, None).render(&state);
     };
-    if state.limits.user_code.check(&peer.0).is_err() {
+    // Only codes that match nothing count: guessing is what the limit is against. While it
+    // is reached, no code is looked up, right or wrong.
+    if state.limits.user_code.peek(&peer.0).is_err() {
         return code_entry_page(
             &state,
             Some(&typed),
@@ -349,6 +351,7 @@ pub(crate) async fn link_form(
         .render(&state);
     }
     let invalid = || {
+        state.limits.user_code.charge(&peer.0);
         code_entry_page(
             &state,
             Some(&typed),
@@ -429,6 +432,7 @@ pub(crate) async fn link_form(
 /// `POST /link`: the user's answer for a device.
 pub(crate) async fn link_submit(
     State(state): State<AppState>,
+    peer: Peer,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -454,7 +458,17 @@ pub(crate) async fn link_submit(
         Ok(None) => return see_other(&Next::Link(code).login_path(&state)),
         Err(_) => return unavailable(&state),
     };
+    // the same limit as on the code page: a signed-in user could guess codes here too
+    if state.limits.user_code.peek(&peer.0).is_err() {
+        return pages::error(
+            &state,
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many codes tried",
+            "Wait a minute and try again.",
+        );
+    }
     let gone = || {
+        state.limits.user_code.charge(&peer.0);
         pages::error(
             &state,
             StatusCode::NOT_FOUND,

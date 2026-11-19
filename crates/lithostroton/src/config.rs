@@ -123,7 +123,8 @@ impl Default for Lifetimes {
     }
 }
 
-/// A token bucket: `burst` requests at once, then one per `every`.
+/// A token bucket: `burst` requests at once, then one per `every`. An `every` of zero is no
+/// limit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RateLimit {
     pub burst: u32,
@@ -133,6 +134,11 @@ pub struct RateLimit {
 impl RateLimit {
     pub const fn new(burst: u32, every: Duration) -> RateLimit {
         RateLimit { burst, every }
+    }
+
+    /// No limit.
+    pub const fn unlimited() -> RateLimit {
+        RateLimit::new(0, Duration::ZERO)
     }
 }
 
@@ -153,7 +159,8 @@ pub struct RateLimits {
     pub registration_per_address: RateLimit,
     /// Device authorization requests per client address.
     pub device_authorization_per_address: RateLimit,
-    /// User codes entered per client address: against guessing user codes.
+    /// User codes that match no waiting device, per client address: against guessing user
+    /// codes. A right code costs nothing, but none is accepted while the limit is reached.
     pub user_code_per_address: RateLimit,
     /// Accounts created per client address.
     pub account_creation_per_address: RateLimit,
@@ -166,6 +173,27 @@ pub struct RateLimits {
     pub rendezvous_per_address: RateLimit,
     /// Rendezvous sessions created per client address.
     pub rendezvous_create_per_address: RateLimit,
+}
+
+impl RateLimits {
+    /// No limits at all: for test labs that sign in many times in a row. Never in production,
+    /// where the password limits are what stand between an attacker and guessing passwords.
+    pub fn unlimited() -> RateLimits {
+        let u = RateLimit::unlimited();
+        RateLimits {
+            password_per_address: u,
+            password_per_user: u,
+            token_per_address: u,
+            registration_per_address: u,
+            device_authorization_per_address: u,
+            user_code_per_address: u,
+            account_creation_per_address: u,
+            revocation_per_address: u,
+            authorize_per_address: u,
+            rendezvous_per_address: u,
+            rendezvous_create_per_address: u,
+        }
+    }
 }
 
 impl Default for RateLimits {

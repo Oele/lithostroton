@@ -332,3 +332,71 @@ async fn a_password_change_signs_other_browsers_out() {
     assert_eq!(r.status, StatusCode::SEE_OTHER);
     assert_eq!(other.get("account/").await.status, StatusCode::OK);
 }
+
+#[tokio::test]
+async fn a_password_change_can_sign_every_session_out() {
+    let lab = Lab::new().await;
+    let client_id = lab.register_web().await;
+    let phone = lab.sign_in(&client_id, "PHONE01").await;
+    lab.sign_in(&client_id, "LAPTOP02").await;
+    let mut b = signed_in_browser(&lab).await;
+    let page = b.get("account/password").await;
+    assert!(
+        page.body.contains("name=\"sign_out\" value=\"1\" checked"),
+        "ticked by default"
+    );
+    let csrf = form_csrf(&page, "account/password");
+
+    // not ticked (an unticked box is not sent): the sessions stay
+    let r = change(&mut b, &csrf, PASSWORD, "new password 1", "new password 1").await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert_eq!(lab.host.device_ids(&lab.alice), vec!["LAPTOP02", "PHONE01"]);
+
+    // a refused change keeps the box as it was
+    let r = b
+        .post(
+            "account/password",
+            &[
+                ("csrf", &csrf),
+                ("current", "wrong"),
+                ("new", "new password 2"),
+                ("new2", "new password 2"),
+                ("sign_out", "1"),
+            ],
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert!(r.body.contains("value=\"1\" checked"));
+    assert_eq!(lab.host.device_ids(&lab.alice).len(), 2);
+
+    // ticked: every session ends (a minute later: alice's password was checked five times)
+    lab.clock.advance(std::time::Duration::from_secs(60));
+    let page = b.get("account/password").await;
+    let csrf = form_csrf(&page, "account/password");
+    let r = b
+        .post(
+            "account/password",
+            &[
+                ("csrf", &csrf),
+                ("current", "new password 1"),
+                ("new", "new password 2"),
+                ("new2", "new password 2"),
+                ("sign_out", "1"),
+            ],
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert!(
+        r.body.contains("All your 2 sessions are signed out"),
+        "{}",
+        r.body
+    );
+    assert!(lab.host.device_ids(&lab.alice).is_empty());
+    assert!(
+        lab.host
+            .whoami(phone["access_token"].as_str().unwrap())
+            .is_none()
+    );
+    // the account page itself stays signed in
+    assert_eq!(b.get("account/").await.status, StatusCode::OK);
+}

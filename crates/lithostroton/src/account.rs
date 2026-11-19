@@ -458,7 +458,13 @@ pub(crate) async fn sign_out_submit(
 
 // ---- password ----
 
-fn password_page(state: &AppState, csrf: &Csrf, current: &Current, error: Option<&str>) -> Page {
+fn password_page(
+    state: &AppState,
+    csrf: &Csrf,
+    current: &Current,
+    error: Option<&str>,
+    sign_out: bool,
+) -> Page {
     let body = format!(
         "{alert}<form method=\"post\" action=\"{action}\">{csrf}\
          <input type=\"text\" name=\"username\" value=\"{user}\" autocomplete=\"username\" hidden>\n\
@@ -468,11 +474,19 @@ fn password_page(state: &AppState, csrf: &Csrf, current: &Current, error: Option
          <input type=\"password\" id=\"new\" name=\"new\" autocomplete=\"new-password\" required>\n\
          <label for=\"new2\">New password again</label>\n\
          <input type=\"password\" id=\"new2\" name=\"new2\" autocomplete=\"new-password\" required>\n\
+         <p class=\"check\"><input type=\"checkbox\" id=\"sign_out\" name=\"sign_out\" value=\"1\"{checked} \
+         aria-describedby=\"sign_out-help\"> <label for=\"sign_out\">Also sign out all your \
+         sessions</label></p>\n\
+         <p class=\"note\" id=\"sign_out-help\">Every app and device signed in to your account \
+         will have to sign in again, with the new password. Do this if someone else may know \
+         your password. A device whose keys are not backed up can lose access to older \
+         encrypted messages.</p>\n\
          <div class=\"actions\"><button type=\"submit\">Change password</button></div></form>\n",
         alert = alert(error),
         action = esc(&account_path(state, AccountPage::Password)),
         csrf = hidden("csrf", &csrf.token(state, "password")),
         user = esc(&current.user.user_id),
+        checked = if sign_out { " checked" } else { "" },
     );
     page(state, csrf, current, "Change your password", body)
 }
@@ -484,7 +498,8 @@ pub(crate) async fn password_form(State(state): State<AppState>, headers: Header
         Err(r) => return r,
     };
     let csrf = Csrf::of(&state, &headers);
-    password_page(&state, &csrf, &current, None).render(&state)
+    // ticked by default, as the legacy API's `logout_devices` defaults to true
+    password_page(&state, &csrf, &current, None, true).render(&state)
 }
 
 /// Checks the password of the signed-in user, rate-limited like the sign-in form. `Err` is the
@@ -532,8 +547,9 @@ pub(crate) async fn password_submit(
         return bad_form(&state);
     }
     let csrf = Csrf::of(&state, &headers);
+    let sign_out = form.get("sign_out").is_some();
     let refuse = |msg: &str| {
-        password_page(&state, &csrf, &current, Some(msg))
+        password_page(&state, &csrf, &current, Some(msg), sign_out)
             .status(StatusCode::BAD_REQUEST)
             .render(&state)
     };
@@ -562,17 +578,55 @@ pub(crate) async fn password_submit(
         Ok(c) => c,
         Err(_) => return unavailable(&state),
     };
-    page(
-        &state,
-        &csrf,
-        &current,
-        "Password changed",
-        "<p>Your password is changed. Use the new one from now on. Other browsers signed in \
-         to these pages are signed out.</p>\n"
-            .to_owned(),
-    )
-    .cookie(Some(cookie))
-    .render(&state)
+    let mut message = "<p>Your password is changed. Use the new one from now on. Other \
+                       browsers signed in to these pages are signed out.</p>\n"
+        .to_owned();
+    if sign_out {
+        message.push_str(&sign_out_everything(&state, &current.user.user_id).await);
+    }
+    page(&state, &csrf, &current, "Password changed", message)
+        .cookie(Some(cookie))
+        .render(&state)
+}
+
+/// Ends every session of the user (after a password change, if asked); says how it went.
+async fn sign_out_everything(state: &AppState, user_id: &str) -> String {
+    let sessions_link = format!(
+        "<a href=\"{}\">Sessions</a>",
+        esc(&account_path(state, AccountPage::Sessions))
+    );
+    let devices = match state.host.devices(user_id).await {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::error!(error = %e, "listing devices after a password change failed");
+            return format!(
+                "<p class=\"alert\" role=\"alert\">Your sessions could not be signed out. Sign \
+                 them out on the {sessions_link} page.</p>\n"
+            );
+        }
+    };
+    let mut failed = 0;
+    for d in &devices {
+        if let Err(e) = state.host.end_session(user_id, &d.device_id).await {
+            tracing::error!(error = %e, device_id = %d.device_id, "signing out a session failed");
+            failed += 1;
+        }
+    }
+    tracing::info!(
+        user_id,
+        signed_out = devices.len() - failed,
+        failed,
+        "sessions signed out after a password change"
+    );
+    match (devices.len() - failed, failed) {
+        (_, 0) if devices.is_empty() => "<p>No sessions were signed in.</p>\n".to_owned(),
+        (1, 0) => "<p>Your one session is signed out.</p>\n".to_owned(),
+        (n, 0) => format!("<p>All your {n} sessions are signed out.</p>\n"),
+        (_, f) => format!(
+            "<p class=\"alert\" role=\"alert\">{f} of your sessions could not be signed out. \
+             Sign them out on the {sessions_link} page.</p>\n"
+        ),
+    }
 }
 
 // ---- cross-signing reset ----

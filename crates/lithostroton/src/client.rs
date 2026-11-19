@@ -12,7 +12,7 @@ use http::{HeaderValue, StatusCode, header};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::{crypto, error::OAuthError, http_util::Peer, state::AppState};
+use crate::{config::is_loopback, crypto, error::OAuthError, http_util::Peer, state::AppState};
 
 pub(crate) const GRANT_AUTHORIZATION_CODE: &str = "authorization_code";
 pub(crate) const GRANT_REFRESH_TOKEN: &str = "refresh_token";
@@ -168,8 +168,9 @@ fn same_or_subdomain(host: &str, base: &str) -> bool {
             && host.as_bytes()[host.len() - base.len() - 1] == b'.')
 }
 
-/// An `https` URI with a host, no user or password and no fragment.
-fn parse_https(uri: &str, field: &str) -> Result<url::Url, String> {
+/// An `https` URI with a host, no user or password and no fragment. With `lab` (the issuer
+/// is on loopback) an `http` URI on loopback too, as a web client's development server has.
+fn parse_https(uri: &str, field: &str, lab: bool) -> Result<url::Url, String> {
     if uri.len() > MAX_URI {
         return Err(format!("{field} is too long"));
     }
@@ -177,8 +178,15 @@ fn parse_https(uri: &str, field: &str) -> Result<url::Url, String> {
         return Err(format!("{field} must not have a fragment"));
     }
     let u = url::Url::parse(uri).map_err(|_| format!("{field} is not a valid URI"))?;
-    if u.scheme() != "https" {
-        return Err(format!("{field} must use https"));
+    match u.scheme() {
+        "https" => {}
+        "http" if lab && is_loopback(&u) => {}
+        _ if lab => {
+            return Err(format!(
+                "{field} must use https (or http on a loopback host, as the issuer is)"
+            ));
+        }
+        _ => return Err(format!("{field} must use https")),
     }
     if u.host_str().is_none_or(str::is_empty) {
         return Err(format!("{field} must have a host"));
@@ -190,8 +198,13 @@ fn parse_https(uri: &str, field: &str) -> Result<url::Url, String> {
 }
 
 /// An https URI of the client's that must be on the client URI's host or a subdomain of it.
-fn check_related_uri(uri: &str, field: &str, client_host: &str) -> Result<(), MetadataError> {
-    let u = parse_https(uri, field).map_err(MetadataError::Metadata)?;
+fn check_related_uri(
+    uri: &str,
+    field: &str,
+    client_host: &str,
+    lab: bool,
+) -> Result<(), MetadataError> {
+    let u = parse_https(uri, field, lab).map_err(MetadataError::Metadata)?;
     if !u
         .host_str()
         .is_some_and(|h| same_or_subdomain(h, client_host))
@@ -215,11 +228,13 @@ const FORBIDDEN_SCHEMES: [&str; 8] = [
     "ws",
 ];
 
-/// Checks one redirect URI by the specification's "Redirect URI validation".
+/// Checks one redirect URI by the specification's "Redirect URI validation". With `lab` (the
+/// issuer is on loopback), a web client on loopback may use http.
 pub(crate) fn check_redirect_uri(
     uri: &str,
     app: ApplicationType,
     client_host: &str,
+    lab: bool,
 ) -> Result<(), String> {
     if uri.len() > MAX_URI {
         return Err("a redirect URI is too long".into());
@@ -232,7 +247,7 @@ pub(crate) fn check_redirect_uri(
     }
     let u = url::Url::parse(uri).map_err(|_| format!("{uri} is not a valid URI"))?;
     let web_rules = |u: &url::Url| -> Result<(), String> {
-        parse_https(uri, "a redirect URI")?;
+        parse_https(uri, "a redirect URI", lab)?;
         if !u
             .host_str()
             .is_some_and(|h| same_or_subdomain(h, client_host))
@@ -245,6 +260,7 @@ pub(crate) fn check_redirect_uri(
     };
     match (app, u.scheme()) {
         (_, "https") => web_rules(&u),
+        (ApplicationType::Web, "http") if lab && is_loopback(&u) => web_rules(&u),
         (ApplicationType::Web, _) => Err(format!("{uri}: a web client's redirect URIs use https")),
         (ApplicationType::Native, "http") => {
             // a loopback interface, without a port (any port is accepted when it is used)
@@ -290,10 +306,12 @@ pub(crate) fn check_redirect_uri(
 }
 
 /// Validates the metadata of a registration request (a JSON object) and returns what is
-/// registered. `device_grant` says whether the device authorization grant is offered.
+/// registered. `device_grant` says whether the device authorization grant is offered; `lab`
+/// whether the issuer is on loopback, where a client on loopback may use http for its URIs.
 pub(crate) fn validate_metadata(
     body: &Value,
     device_grant: bool,
+    lab: bool,
 ) -> Result<ClientMetadata, MetadataError> {
     let obj = body
         .as_object()
@@ -307,7 +325,7 @@ pub(crate) fn validate_metadata(
 
     let client_uri =
         optional_string(obj, "client_uri")?.ok_or_else(|| meta_err("client_uri is required"))?;
-    let parsed = parse_https(&client_uri, "client_uri").map_err(MetadataError::Metadata)?;
+    let parsed = parse_https(&client_uri, "client_uri", lab).map_err(MetadataError::Metadata)?;
     let client_host = parsed.host_str().unwrap_or_default().to_owned();
 
     let client_name = optional_string(obj, "client_name")?;
@@ -322,7 +340,7 @@ pub(crate) fn validate_metadata(
     let related = |field: &str| -> Result<Option<String>, MetadataError> {
         let v = optional_string(obj, field)?;
         if let Some(uri) = &v {
-            check_related_uri(uri, field, &client_host)?;
+            check_related_uri(uri, field, &client_host, lab)?;
         }
         Ok(v)
     };
@@ -378,7 +396,7 @@ pub(crate) fn validate_metadata(
 
     let mut redirect_uris: Vec<String> = Vec::new();
     for uri in string_array(obj, "redirect_uris")?.unwrap_or_default() {
-        check_redirect_uri(&uri, application_type, &client_host)
+        check_redirect_uri(&uri, application_type, &client_host, lab)
             .map_err(MetadataError::RedirectUri)?;
         if !redirect_uris.contains(&uri) {
             redirect_uris.push(uri);
@@ -501,7 +519,11 @@ async fn registration(state: &AppState, body: &[u8]) -> Result<Client, OAuthErro
     }
     let value: Value = serde_json::from_slice(body)
         .map_err(|_| OAuthError::invalid_client_metadata("the request body is not JSON"))?;
-    let metadata = validate_metadata(&value, state.config.device_authorization)?;
+    let metadata = validate_metadata(
+        &value,
+        state.config.device_authorization,
+        state.issuer.loopback,
+    )?;
     let client = register(state, metadata).await?;
     tracing::info!(
         client_id = %client.client_id,
@@ -520,10 +542,10 @@ mod tests {
     use super::*;
 
     fn native(uri: &str) -> Result<(), String> {
-        check_redirect_uri(uri, ApplicationType::Native, "example.com")
+        check_redirect_uri(uri, ApplicationType::Native, "example.com", false)
     }
     fn web(uri: &str) -> Result<(), String> {
-        check_redirect_uri(uri, ApplicationType::Web, "example.com")
+        check_redirect_uri(uri, ApplicationType::Web, "example.com", false)
     }
 
     /// The examples of the specification's "Redirect URI validation".
@@ -579,8 +601,14 @@ mod tests {
 
     #[test]
     fn private_use_scheme_needs_a_dotted_domain() {
-        assert!(check_redirect_uri("localhost:/cb", ApplicationType::Native, "localhost").is_err());
-        assert!(check_redirect_uri("1.0.0.127:/cb", ApplicationType::Native, "127.0.0.1").is_err());
+        assert!(
+            check_redirect_uri("localhost:/cb", ApplicationType::Native, "localhost", false)
+                .is_err()
+        );
+        assert!(
+            check_redirect_uri("1.0.0.127:/cb", ApplicationType::Native, "127.0.0.1", false)
+                .is_err()
+        );
     }
 
     fn client(app: ApplicationType, uris: &[&str]) -> Client {
@@ -658,6 +686,7 @@ mod tests {
                 "grant_types": ["authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:token-exchange"],
             }),
             true,
+            false,
         )
         .unwrap();
         assert_eq!(m.application_type, ApplicationType::Web);
@@ -679,9 +708,9 @@ mod tests {
         let with = |k: &str, v: Value| {
             let mut b = base.clone();
             b[k] = v;
-            validate_metadata(&b, true)
+            validate_metadata(&b, true, false)
         };
-        assert!(validate_metadata(&base, true).is_ok());
+        assert!(validate_metadata(&base, true, false).is_ok());
         assert!(matches!(
             with("client_uri", Value::Null),
             Err(MetadataError::Metadata(_))
@@ -704,7 +733,64 @@ mod tests {
         ));
         assert!(with("response_types", json!(["token"])).is_err());
         assert!(with("grant_types", json!(["refresh_token"])).is_err());
-        assert!(validate_metadata(&json!([]), true).is_err());
+        assert!(validate_metadata(&json!([]), true, false).is_err());
+    }
+
+    /// With the issuer on loopback (a lab), a web client served from a development server on
+    /// loopback may use http; nowhere else, and not with the issuer elsewhere.
+    #[test]
+    fn loopback_lab_allows_http_on_loopback() {
+        let dev = json!({
+            "client_uri": "http://localhost:5173/",
+            "logo_uri": "http://localhost:5173/logo.png",
+            "policy_uri": "http://localhost:5173/policy",
+            "redirect_uris": ["http://localhost:5173/callback"],
+        });
+        let m = validate_metadata(&dev, true, true).unwrap();
+        assert_eq!(m.redirect_uris, vec!["http://localhost:5173/callback"]);
+        assert_eq!(
+            validate_metadata(&dev, true, false).unwrap_err(),
+            MetadataError::Metadata("client_uri must use https".into())
+        );
+
+        for ok in ["http://127.0.0.1:8080/cb", "http://[::1]:8080/cb"] {
+            let host = url::Url::parse(ok).unwrap().host_str().unwrap().to_owned();
+            assert!(
+                check_redirect_uri(ok, ApplicationType::Web, &host, true).is_ok(),
+                "{ok}"
+            );
+            assert!(
+                check_redirect_uri(ok, ApplicationType::Web, &host, false).is_err(),
+                "{ok}"
+            );
+        }
+        for bad in [
+            // http off loopback, a host other than client_uri's, other schemes
+            ("http://example.com/cb", "example.com"),
+            ("http://127.0.0.1:5173/cb", "localhost"),
+            ("http://localhost.example.com/cb", "localhost"),
+            ("ftp://localhost/cb", "localhost"),
+        ] {
+            assert!(
+                check_redirect_uri(bad.0, ApplicationType::Web, bad.1, true).is_err(),
+                "{bad:?}"
+            );
+        }
+        let off_loopback = json!({
+            "client_uri": "http://example.com/",
+            "redirect_uris": ["https://example.com/cb"],
+        });
+        assert!(validate_metadata(&off_loopback, true, true).is_err());
+        // a native app's loopback redirect still has no port
+        assert!(
+            check_redirect_uri(
+                "http://localhost:5173/cb",
+                ApplicationType::Native,
+                "example.com",
+                true
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -715,6 +801,7 @@ mod tests {
                 "grant_types": ["urn:ietf:params:oauth:grant-type:device_code", "refresh_token"],
             }),
             true,
+            false,
         )
         .unwrap();
         assert_eq!(m.grant_types, vec![GRANT_REFRESH_TOKEN, GRANT_DEVICE_CODE]);
@@ -726,6 +813,7 @@ mod tests {
                     "client_uri": "https://example.com/",
                     "grant_types": ["urn:ietf:params:oauth:grant-type:device_code"],
                 }),
+                false,
                 false,
             )
             .is_err()

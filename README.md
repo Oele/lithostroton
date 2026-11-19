@@ -13,7 +13,9 @@ authorization side of it.
 - Authorization server metadata (RFC 8414) for `GET /_matrix/client/v1/auth_metadata`.
 - Dynamic client registration (RFC 7591) with the Matrix rules for client metadata and
   redirect URIs, including native apps' loopback and private-use-scheme redirects (RFC 8252).
-  Registrations with the same metadata share one client ID.
+  Registrations with the same metadata share one client ID. When the issuer itself is on a
+  loopback host (a lab), clients on loopback may use http for their URIs too, as a web client's
+  development server does.
 - The authorization code grant with PKCE S256 (RFC 7636), always; exact redirect URI
   matching; single-use codes bound to client, redirect URI and challenge; `query` and
   `fragment` response modes; `iss` in the response (RFC 9207); `prompt=create`, `prompt=login`,

@@ -239,6 +239,8 @@ pub(crate) struct Issuer {
     pub origin: String,
     /// `/path/`
     pub path: String,
+    /// Whether the issuer is on a loopback host: a lab, where clients on loopback may use http.
+    pub loopback: bool,
 }
 
 impl Config {
@@ -293,11 +295,13 @@ impl Config {
             origin: u.origin().ascii_serialization(),
             url,
             path,
+            loopback: is_loopback(u),
         })
     }
 }
 
-fn is_loopback(u: &Url) -> bool {
+/// Whether `u` is on `localhost` or a loopback address.
+pub(crate) fn is_loopback(u: &Url) -> bool {
     match u.host() {
         Some(url::Host::Domain(d)) => d == "localhost",
         Some(url::Host::Ipv4(ip)) => ip.is_loopback(),

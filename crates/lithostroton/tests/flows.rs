@@ -84,6 +84,35 @@ async fn registration_refusals_are_rfc7591_errors() {
     assert_oauth_error(&r, StatusCode::BAD_REQUEST, "invalid_client_metadata");
 }
 
+/// A lab on loopback takes a web client served by a development server on loopback, over
+/// http; a server elsewhere does not.
+#[tokio::test]
+async fn loopback_lab_registers_a_web_client_on_loopback_http() {
+    let dev = json!({
+        "client_name": "Dev build",
+        "client_uri": "http://localhost:5173/",
+        "redirect_uris": ["http://localhost:5173/oauth/callback"],
+        "grant_types": ["authorization_code", "refresh_token"],
+    });
+    let lab = Lab::new().await;
+    let r = lab.post_json("oauth2/registration", &dev).await;
+    assert_oauth_error(&r, StatusCode::BAD_REQUEST, "invalid_client_metadata");
+
+    let lab =
+        Lab::with(|c| c.issuer = "http://localhost:38018/_lithostroton/".parse().unwrap()).await;
+    let r = lab.post_json("oauth2/registration", &dev).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.body);
+    assert_eq!(
+        r.json()["redirect_uris"],
+        json!(["http://localhost:5173/oauth/callback"])
+    );
+    let mut off = dev.clone();
+    off["client_uri"] = json!("http://dev.example.com/");
+    off["redirect_uris"] = json!(["http://dev.example.com/oauth/callback"]);
+    let r = lab.post_json("oauth2/registration", &off).await;
+    assert_oauth_error(&r, StatusCode::BAD_REQUEST, "invalid_client_metadata");
+}
+
 #[tokio::test]
 async fn authorization_code_flow() {
     let lab = Lab::new().await;

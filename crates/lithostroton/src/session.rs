@@ -23,8 +23,6 @@ pub(crate) struct BrowserSession {
 
 /// The signed-in browser: its session and the user, who still may sign in.
 pub(crate) struct Current {
-    // read by the account pages, which ask for the password again after a while
-    #[allow(dead_code)]
     pub session: BrowserSession,
     pub user: User,
 }

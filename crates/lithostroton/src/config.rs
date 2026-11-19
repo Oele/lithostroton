@@ -25,6 +25,9 @@ pub struct Config {
     pub registration: bool,
     /// Whether the device authorization grant (RFC 8628) is offered. On by default.
     pub device_authorization: bool,
+    /// Whether the account pages are served and advertised (`account_management_uri`). On by
+    /// default.
+    pub account_management: bool,
     /// Whether lithostroton sends CORS headers on the endpoints that clients call from web
     /// pages (metadata, registration, token, revocation, device authorization). On by
     /// default. Turn it off if the host adds the same headers to everything it serves:
@@ -47,6 +50,7 @@ impl Config {
             secret_key: None,
             registration: false,
             device_authorization: true,
+            account_management: true,
             cors: true,
             rendezvous: RendezvousConfig::default(),
             lifetimes: Lifetimes::default(),

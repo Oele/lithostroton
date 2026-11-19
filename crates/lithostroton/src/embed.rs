@@ -23,7 +23,7 @@ use http::{HeaderMap, HeaderValue, StatusCode, header};
 use tower::ServiceExt;
 
 use crate::{
-    authorize, client,
+    account, authorize, client,
     config::{Config, ConfigError},
     crypto, device,
     host::Host,
@@ -262,7 +262,27 @@ fn routes(state: AppState) -> Router {
             get(authorize::consent_form).post(authorize::consent_submit),
         )
         .route("/link", get(device::link_form).post(device::link_submit))
-        .route("/assets/style.css", get(style));
+        .route("/assets/style.css", get(style))
+        .route("/account", get(to_account))
+        .route("/account/", get(account::overview))
+        .route(
+            "/account/profile",
+            get(account::profile_form).post(account::profile_submit),
+        )
+        .route("/account/sessions", get(account::sessions))
+        .route("/account/session", get(account::session_view))
+        .route(
+            "/account/sign-out",
+            get(account::sign_out_form).post(account::sign_out_submit),
+        )
+        .route(
+            "/account/password",
+            get(account::password_form).post(account::password_submit),
+        )
+        .route(
+            "/account/cross-signing",
+            get(account::cross_signing_form).post(account::cross_signing_submit),
+        );
     // the session URLs of the MSC4108 (2024) rendezvous
     let rendezvous = Router::new()
         .route(
@@ -284,7 +304,15 @@ fn routes(state: AppState) -> Router {
 }
 
 async fn index(State(state): State<AppState>) -> Response {
-    see_other(&state.path("login"))
+    if state.config.account_management {
+        see_other(&state.path("account/"))
+    } else {
+        see_other(&state.path("login"))
+    }
+}
+
+async fn to_account(State(state): State<AppState>) -> Response {
+    see_other(&state.path("account/"))
 }
 
 async fn style() -> Response {

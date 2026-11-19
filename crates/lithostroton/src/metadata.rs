@@ -10,6 +10,7 @@ use http::{HeaderValue, header};
 use serde_json::{Value, json};
 
 use crate::{
+    account::ACTIONS,
     client::{GRANT_AUTHORIZATION_CODE, GRANT_DEVICE_CODE, GRANT_REFRESH_TOKEN},
     scope::API_SCOPES,
     state::{AppState, Inner},
@@ -40,6 +41,10 @@ pub(crate) fn metadata(state: &Inner) -> Value {
     }
     if state.config.registration {
         m["prompt_values_supported"] = json!(["create"]);
+    }
+    if state.config.account_management {
+        m["account_management_uri"] = json!(state.url("account/"));
+        m["account_management_actions_supported"] = json!(ACTIONS);
     }
     m
 }

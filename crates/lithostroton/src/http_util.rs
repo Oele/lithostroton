@@ -202,15 +202,15 @@ pub(crate) fn see_other(location: &str) -> Response {
     resp
 }
 
-/// An HTTP date (RFC 9110 section 5.6.7, IMF-fixdate): `Sun, 06 Nov 1994 08:49:37 GMT`.
-pub(crate) fn http_date(t: std::time::SystemTime) -> String {
+/// A time as a civil date in UTC: year, month (1-12), day, hour, minute, second, and the
+/// weekday (0 is Thursday, as 1970-01-01 was).
+pub(crate) fn civil(t: std::time::SystemTime) -> (i64, usize, i64, u64, u64, u64, usize) {
     let secs = t
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;
-    let (h, m, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
     // days since 1970-01-01 to a civil date (Howard Hinnant's algorithm)
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
@@ -221,19 +221,29 @@ pub(crate) fn http_date(t: std::time::SystemTime) -> String {
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + i64::from(month <= 2);
-    const WEEKDAYS: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
-    const MONTHS: [&str; 12] = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
-    format!(
-        "{}, {:02} {} {} {:02}:{:02}:{:02} GMT",
-        WEEKDAYS[days.rem_euclid(7) as usize],
-        day,
-        MONTHS[(month - 1) as usize],
+    (
         year,
-        h,
-        m,
-        s
+        month as usize,
+        day,
+        rem / 3600,
+        (rem % 3600) / 60,
+        rem % 60,
+        days.rem_euclid(7) as usize,
+    )
+}
+
+pub(crate) const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/// An HTTP date (RFC 9110 section 5.6.7, IMF-fixdate): `Sun, 06 Nov 1994 08:49:37 GMT`.
+pub(crate) fn http_date(t: std::time::SystemTime) -> String {
+    const WEEKDAYS: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
+    let (y, mo, d, h, mi, s, wd) = civil(t);
+    format!(
+        "{}, {d:02} {} {y} {h:02}:{mi:02}:{s:02} GMT",
+        WEEKDAYS[wd],
+        MONTHS[mo - 1]
     )
 }
 

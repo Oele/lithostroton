@@ -19,6 +19,7 @@ use crate::{
     host::{Availability, HostError, NewUser},
     http_util::{Csrf, Peer, check_form, see_other},
     pages::{self, Page, alert, esc, hidden},
+    scope::is_device_id,
     session,
     state::AppState,
 };
@@ -30,8 +31,22 @@ pub(crate) enum Next {
     Authorize(String),
     /// The consent page of a device grant, by its user code.
     Link(String),
-    /// The account page.
-    Account,
+    /// A page of the account.
+    Account(AccountPage),
+}
+
+/// The pages of the account.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum AccountPage {
+    Overview,
+    Profile,
+    Sessions,
+    /// One session, by device ID.
+    Session(String),
+    /// The confirmation of signing a session out.
+    SignOut(String),
+    Password,
+    CrossSigning,
 }
 
 fn is_ref(s: &str) -> bool {
@@ -41,12 +56,38 @@ fn is_ref(s: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
+fn enc(s: &str) -> String {
+    form_urlencoded::byte_serialize(s.as_bytes()).collect()
+}
+
 impl Next {
+    pub const ACCOUNT: Next = Next::Account(AccountPage::Overview);
+
     pub fn parse(s: Option<&str>) -> Next {
-        match s.and_then(|s| s.split_once(':')) {
-            Some(("authorize", id)) if is_ref(id) => Next::Authorize(id.to_owned()),
-            Some(("link", code)) if is_ref(code) => Next::Link(code.to_owned()),
-            _ => Next::Account,
+        let Some(s) = s else {
+            return Next::ACCOUNT;
+        };
+        let (kind, rest) = s.split_once(':').unwrap_or((s, ""));
+        let device = |id: &str, page: fn(String) -> AccountPage| {
+            if is_device_id(id) {
+                Next::Account(page(id.to_owned()))
+            } else {
+                Next::Account(AccountPage::Sessions)
+            }
+        };
+        match (kind, rest) {
+            ("authorize", id) if is_ref(id) => Next::Authorize(id.to_owned()),
+            ("link", code) if is_ref(code) => Next::Link(code.to_owned()),
+            ("account", "profile") => Next::Account(AccountPage::Profile),
+            ("account", "sessions") => Next::Account(AccountPage::Sessions),
+            ("account", "password") => Next::Account(AccountPage::Password),
+            ("account", "cross-signing") => Next::Account(AccountPage::CrossSigning),
+            ("account", r) => match r.split_once(':') {
+                Some(("session", id)) => device(id, AccountPage::Session),
+                Some(("sign-out", id)) => device(id, AccountPage::SignOut),
+                _ => Next::ACCOUNT,
+            },
+            _ => Next::ACCOUNT,
         }
     }
 
@@ -54,20 +95,37 @@ impl Next {
         match self {
             Next::Authorize(id) => format!("authorize:{id}"),
             Next::Link(code) => format!("link:{code}"),
-            Next::Account => "account".to_owned(),
+            Next::Account(page) => match page {
+                AccountPage::Overview => "account".to_owned(),
+                AccountPage::Profile => "account:profile".to_owned(),
+                AccountPage::Sessions => "account:sessions".to_owned(),
+                AccountPage::Session(id) => format!("account:session:{id}"),
+                AccountPage::SignOut(id) => format!("account:sign-out:{id}"),
+                AccountPage::Password => "account:password".to_owned(),
+                AccountPage::CrossSigning => "account:cross-signing".to_owned(),
+            },
         }
     }
 
     /// The path to go to.
     pub fn path(&self, state: &AppState) -> String {
-        match self {
-            Next::Authorize(id) => state.path(&format!("consent?req={id}")),
-            Next::Link(code) => state.path(&format!("link?code={code}")),
-            Next::Account => state.path("account/"),
-        }
+        state.path(&match self {
+            Next::Authorize(id) => format!("consent?req={id}"),
+            Next::Link(code) => format!("link?code={code}"),
+            Next::Account(page) => match page {
+                AccountPage::Overview => "account/".to_owned(),
+                AccountPage::Profile => "account/profile".to_owned(),
+                AccountPage::Sessions => "account/sessions".to_owned(),
+                AccountPage::Session(id) => format!("account/session?device_id={}", enc(id)),
+                AccountPage::SignOut(id) => format!("account/sign-out?device_id={}", enc(id)),
+                AccountPage::Password => "account/password".to_owned(),
+                AccountPage::CrossSigning => "account/cross-signing".to_owned(),
+            },
+        })
     }
 
-    /// The path of the sign-in page that comes back here.
+    /// The path of the sign-in page that comes back here. The encoded form is all
+    /// URL-safe: IDs, codes and device IDs are checked before they become a `Next`.
     pub fn login_path(&self, state: &AppState) -> String {
         state.path(&format!("login?next={}", self.encode()))
     }
@@ -80,7 +138,7 @@ pub(crate) struct NextQuery {
 }
 
 /// The key of a username for the per-user rate limit: the localpart, lowercased.
-fn username_key(username: &str) -> String {
+pub(crate) fn username_key(username: &str) -> String {
     let u = username.trim().trim_start_matches('@');
     let local = u.split(':').next().unwrap_or(u);
     local.to_lowercase()
@@ -421,9 +479,25 @@ mod tests {
             "link:a/b",
             "",
         ] {
-            assert_eq!(Next::parse(Some(odd)), Next::Account, "{odd}");
+            assert_eq!(Next::parse(Some(odd)), Next::ACCOUNT, "{odd}");
         }
-        assert_eq!(Next::parse(None), Next::Account);
+        assert_eq!(Next::parse(None), Next::ACCOUNT);
+        for page in [
+            AccountPage::Overview,
+            AccountPage::Profile,
+            AccountPage::Sessions,
+            AccountPage::Session("ABC.d~1".into()),
+            AccountPage::SignOut("XYZ".into()),
+            AccountPage::Password,
+            AccountPage::CrossSigning,
+        ] {
+            let n = Next::Account(page);
+            assert_eq!(Next::parse(Some(&n.encode())), n);
+        }
+        assert_eq!(
+            Next::parse(Some("account:session:a/b")),
+            Next::Account(AccountPage::Sessions)
+        );
     }
 
     #[test]

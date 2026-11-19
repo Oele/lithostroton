@@ -240,6 +240,8 @@ button.link {
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 0.5rem 0.25rem; border-bottom: 1px solid var(--line); vertical-align: top; }
 nav ul { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 1rem; }
+ul.plain { list-style: none; padding: 0; }
+.actions a { align-self: center; }
 "#;
 
 #[cfg(test)]

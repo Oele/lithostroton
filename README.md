@@ -29,9 +29,10 @@ authorization side of it.
 - The rendezvous of sign-in with a QR code: MSC4388 (`/_matrix/client/v1/rendezvous` and
   `io.element.msc4388`), and the 2024 revision of MSC4108 that released matrix-rust-sdk
   versions speak (`org.matrix.msc4108`).
-
-Planned: the account management pages (sessions, display name, password, cross-signing
-reset).
+- Account pages at the account management URL (MSC4191): profile (display name), sessions
+  with sign-out, password change, and the confirmation of a cross-signing reset that the
+  `m.oauth` stage of User-Interactive Authentication sends users to. The specification's
+  `action` and `device_id` parameters lead to the right page.
 
 ## How it fits in a homeserver
 

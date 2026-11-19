@@ -456,6 +456,11 @@ impl Host for MemoryHost {
     }
 
     async fn set_password(&self, user_id: &str, new_password: &str) -> Result<(), HostError> {
+        if new_password.len() < 8 {
+            return Err(HostError::Refused(
+                "Use a password of at least 8 characters.".into(),
+            ));
+        }
         match self.lock().users.get_mut(user_id) {
             Some(u) => {
                 u.password = new_password.to_owned();

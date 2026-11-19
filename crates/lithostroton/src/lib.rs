@@ -35,6 +35,7 @@
 //! | `consent`                                 | consent page of the authorization code |
 //! | `link`                                    | verification URI of the device grant   |
 //! | `rendezvous/{id}`                         | an MSC4108 (2024) rendezvous session   |
+//! | `account/`                                | account management URL (MSC4191)       |
 //!
 //! [`Embedded::client_router`] has the rendezvous endpoints of sign-in with a QR code, at
 //! their paths of the Client-Server API, for the homeserver to merge into its own routes:
@@ -58,6 +59,7 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+mod account;
 mod authorize;
 mod client;
 mod clock;

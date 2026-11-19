@@ -29,6 +29,8 @@ pub(crate) struct Inner {
     pub polls: Mutex<HashMap<String, Poll>>,
     /// The rendezvous sessions of sign-in with a QR code.
     pub rendezvous: Sessions,
+    /// Whether the missing client addresses were warned about.
+    pub warned_no_address: std::sync::atomic::AtomicBool,
 }
 
 pub(crate) struct Limits {
@@ -40,6 +42,7 @@ pub(crate) struct Limits {
     pub user_code: Limiter,
     pub account_creation: Limiter,
     pub revocation: Limiter,
+    pub authorize: Limiter,
     pub rendezvous: Limiter,
     pub rendezvous_create: Limiter,
 }
@@ -70,6 +73,7 @@ impl Inner {
             user_code: Limiter::new(r.user_code_per_address, c()),
             account_creation: Limiter::new(r.account_creation_per_address, c()),
             revocation: Limiter::new(r.revocation_per_address, c()),
+            authorize: Limiter::new(r.authorize_per_address, c()),
             rendezvous: Limiter::new(r.rendezvous_per_address, c()),
             rendezvous_create: Limiter::new(r.rendezvous_create_per_address, c()),
         };
@@ -82,6 +86,7 @@ impl Inner {
             limits,
             polls: Mutex::new(HashMap::new()),
             rendezvous: Sessions::default(),
+            warned_no_address: std::sync::atomic::AtomicBool::new(false),
         }
     }
 

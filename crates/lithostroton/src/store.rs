@@ -25,6 +25,7 @@
 //! | `client`          | a registered client's metadata               | until deleted       |
 //! | `client_digest`   | client ID by digest of its metadata          | until deleted       |
 //! | `browser_session` | a signed-in browser                          | browser session ttl |
+//! | `browser_epoch`   | per user: sessions older than this are ended | browser session ttl |
 //! | `authorization`   | an authorization request awaiting the user  | 30 minutes          |
 //! | `code`            | an authorization code                        | code ttl            |
 //! | `code_used`       | a code that was exchanged (replay detection) | code ttl            |

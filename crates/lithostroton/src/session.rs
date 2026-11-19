@@ -13,6 +13,8 @@ use crate::{
 };
 
 const KIND: &str = "browser_session";
+/// Per user: browser sessions that signed in before this time (Unix seconds) are ended.
+const KIND_EPOCH: &str = "browser_epoch";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct BrowserSession {
@@ -40,6 +42,16 @@ pub(crate) async fn current(
     let Some(read) = state.store.get::<BrowserSession>(KIND, &key).await? else {
         return Ok(None);
     };
+    let ended_before = state
+        .store
+        .get::<u64>(KIND_EPOCH, &read.value.user_id)
+        .await?
+        .map(|r| r.value)
+        .unwrap_or(0);
+    if read.value.authenticated_at < ended_before {
+        state.store.delete(KIND, &key).await?;
+        return Ok(None);
+    }
     match state.host.user(&read.value.user_id).await? {
         Some(user) => Ok(Some(Current {
             session: read.value,
@@ -75,6 +87,39 @@ pub(crate) async fn start(state: &AppState, user_id: &str) -> Result<HeaderValue
             return Ok(set_cookie(state, SESSION_COOKIE, &id, Some(ttl.as_secs())));
         }
     }
+}
+
+/// Ends every browser session of the user (after a password change) and starts a new one
+/// for this browser; returns its cookie.
+pub(crate) async fn restart_all(
+    state: &AppState,
+    headers: &HeaderMap,
+    user_id: &str,
+) -> Result<HeaderValue, OAuthError> {
+    let now = state.unix();
+    let until = Some(state.now() + state.config.lifetimes.browser_session);
+    loop {
+        match state.store.get::<u64>(KIND_EPOCH, user_id).await? {
+            Some(old) => {
+                if state
+                    .store
+                    .replace(KIND_EPOCH, user_id, &old.raw, &now, until)
+                    .await?
+                {
+                    break;
+                }
+            }
+            None => {
+                if state.store.insert(KIND_EPOCH, user_id, &now, until).await? {
+                    break;
+                }
+            }
+        }
+    }
+    if let Some(id) = cookie(headers, SESSION_COOKIE) {
+        state.store.delete(KIND, &crypto::secret_key(&id)).await?;
+    }
+    start(state, user_id).await
 }
 
 /// Ends the browser's session, if any, and returns the cookie that removes it.

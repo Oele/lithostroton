@@ -20,7 +20,18 @@ impl FromRequestParts<AppState> for Peer {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Peer, Self::Rejection> {
-        Ok(Peer(address_key(state.host.client_ip(parts))))
+        let ip = state.host.client_ip(parts);
+        if ip.is_none()
+            && !state
+                .warned_no_address
+                .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            tracing::warn!(
+                "no client address for a request: all such requests share one rate limit; \
+                 serve with ConnectInfo<SocketAddr> or implement Host::client_ip"
+            );
+        }
+        Ok(Peer(address_key(ip)))
     }
 }
 

@@ -690,3 +690,42 @@ async fn authorization_requests_expire() {
     assert_eq!(r.status, StatusCode::NOT_FOUND);
     assert!(r.header("location").is_none());
 }
+
+#[tokio::test]
+async fn authorization_requests_are_rate_limited() {
+    let lab = Lab::new().await;
+    let client_id = lab.register_web().await;
+    let mut b = lab.browser();
+    let url = AuthParams::new(&client_id, "D", &Pkce::new()).url();
+    for _ in 0..30 {
+        assert_eq!(b.get(&url).await.status, StatusCode::SEE_OTHER);
+    }
+    let r = b.get(&url).await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(r.header("location").is_none());
+    let before = lab.store.count("authorization");
+    b.get(&url).await;
+    assert_eq!(
+        lab.store.count("authorization"),
+        before,
+        "nothing stored over the limit"
+    );
+}
+
+#[tokio::test]
+async fn consent_request_ids_are_checked() {
+    let lab = Lab::new().await;
+    let mut b = lab.browser();
+    let page = b.get("login").await;
+    let csrf = page.hidden("csrf");
+    // a form answer for a request ID with something else in it
+    for id in ["abc&next=https://evil.org", "../x", &"a".repeat(65)] {
+        let r = b
+            .post(
+                "consent",
+                &[("csrf", &csrf), ("req", id), ("action", "allow")],
+            )
+            .await;
+        assert!(r.header("location").is_none(), "{id}");
+    }
+}

@@ -159,6 +159,9 @@ pub struct RateLimits {
     pub account_creation_per_address: RateLimit,
     /// Revocation requests per client address.
     pub revocation_per_address: RateLimit,
+    /// Authorization requests per client address (each keeps a sign-in request in the store
+    /// for a while).
+    pub authorize_per_address: RateLimit,
     /// Rendezvous requests per client address (two devices poll about once a second each).
     pub rendezvous_per_address: RateLimit,
     /// Rendezvous sessions created per client address.
@@ -177,6 +180,7 @@ impl Default for RateLimits {
             user_code_per_address: RateLimit::new(10, s(6)),
             account_creation_per_address: RateLimit::new(3, s(600)),
             revocation_per_address: RateLimit::new(50, s(1)),
+            authorize_per_address: RateLimit::new(30, s(2)),
             rendezvous_per_address: RateLimit::new(120, Duration::from_millis(200)),
             rendezvous_create_per_address: RateLimit::new(10, s(6)),
         }

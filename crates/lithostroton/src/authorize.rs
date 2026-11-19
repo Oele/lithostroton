@@ -18,8 +18,8 @@ use crate::{
     crypto,
     error::OAuthError,
     form::Params,
-    http_util::{Csrf, check_form, see_other},
-    login::{Next, bad_form, host_failed, oauth_failed, unavailable},
+    http_util::{Csrf, Peer, check_form, see_other},
+    login::{Next, bad_form, host_failed, is_ref, oauth_failed, unavailable},
     pages::{self, Page, esc, hidden},
     scope::{self, MatrixScope},
     session,
@@ -134,9 +134,18 @@ fn bad_request_page(state: &AppState, message: &str) -> Response {
 /// `GET authorization_endpoint`
 pub(crate) async fn authorize(
     State(state): State<AppState>,
+    peer: Peer,
     headers: HeaderMap,
     RawQuery(query): RawQuery,
 ) -> Response {
+    if state.limits.authorize.check(&peer.0).is_err() {
+        return pages::error(
+            &state,
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many sign-in attempts",
+            "Wait a minute, then go back to the application and start again.",
+        );
+    }
     let query = query.unwrap_or_default();
     if query.len() > MAX_QUERY {
         return bad_request_page(&state, "The request is too long.");
@@ -398,7 +407,7 @@ pub(crate) async fn consent_submit(
     if !check_form(&state, &headers, "consent", form.get("csrf")) {
         return bad_form(&state);
     }
-    let Some(id) = form.get("req").filter(|r| r.len() <= 64) else {
+    let Some(id) = form.get("req").filter(|r| is_ref(r)) else {
         return expired_page(&state);
     };
     let current = match session::current(&state, &headers).await {

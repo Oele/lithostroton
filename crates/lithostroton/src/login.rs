@@ -49,7 +49,7 @@ pub(crate) enum AccountPage {
     CrossSigning,
 }
 
-fn is_ref(s: &str) -> bool {
+pub(crate) fn is_ref(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 64
         && s.bytes()

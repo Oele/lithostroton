@@ -301,3 +301,34 @@ async fn password_confirmation_is_rate_limited() {
     assert!(r.body.contains("Too many attempts"), "{}", r.body);
     assert!(!lab.host.cross_signing_reset_allowed(&lab.alice));
 }
+
+#[tokio::test]
+async fn a_password_change_signs_other_browsers_out() {
+    let lab = Lab::new().await;
+    let mut other = signed_in_browser(&lab).await;
+    other.ip = "198.51.100.7".into();
+    lab.clock.advance(std::time::Duration::from_secs(5));
+    let mut b = signed_in_browser(&lab).await;
+    let page = b.get("account/password").await;
+    let csrf = form_csrf(&page, "account/password");
+    let r = change(&mut b, &csrf, PASSWORD, "new password 1", "new password 1").await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert_eq!(
+        b.get("account/").await.status,
+        StatusCode::OK,
+        "this browser stays"
+    );
+    let r = other.get("account/").await;
+    assert_eq!(
+        r.status,
+        StatusCode::SEE_OTHER,
+        "the other browser is signed out"
+    );
+    assert!(r.location().contains("/login?"));
+    // and signing in again there works, with the new password
+    let r = other
+        .login("login?next=account", "alice", "new password 1")
+        .await;
+    assert_eq!(r.status, StatusCode::SEE_OTHER);
+    assert_eq!(other.get("account/").await.status, StatusCode::OK);
+}

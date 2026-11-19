@@ -557,13 +557,21 @@ pub(crate) async fn password_submit(
         Err(e) => return host_failed(&state, e),
     }
     tracing::info!(user_id = %current.user.user_id, "password changed");
+    // other browsers signed in to these pages are signed out; this one gets a new session
+    let cookie = match session::restart_all(&state, &headers, &current.user.user_id).await {
+        Ok(c) => c,
+        Err(_) => return unavailable(&state),
+    };
     page(
         &state,
         &csrf,
         &current,
         "Password changed",
-        "<p>Your password is changed. Use the new one from now on.</p>\n".to_owned(),
+        "<p>Your password is changed. Use the new one from now on. Other browsers signed in \
+         to these pages are signed out.</p>\n"
+            .to_owned(),
     )
+    .cookie(Some(cookie))
     .render(&state)
 }
 

@@ -19,7 +19,6 @@ use crate::{
     host::{Availability, HostError, NewUser},
     http_util::{Csrf, Peer, check_form, see_other},
     pages::{self, Page, alert, esc, hidden},
-    scope::is_device_id,
     session,
     state::AppState,
 };
@@ -60,6 +59,27 @@ fn enc(s: &str) -> String {
     form_urlencoded::byte_serialize(s.as_bytes()).collect()
 }
 
+/// Whether `id` can name an existing session on the account pages: the homeserver's device IDs
+/// from legacy logins may hold any characters, so only the length is checked. They are encoded
+/// wherever they go.
+pub(crate) fn is_device_ref(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 255
+}
+
+/// `s` as a query value, percent-encoded but for unreserved characters and `:`, which keep
+/// the `next` values readable.
+fn query_value(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~' | b':') {
+            out.push(char::from(b));
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
 impl Next {
     pub const ACCOUNT: Next = Next::Account(AccountPage::Overview);
 
@@ -69,7 +89,7 @@ impl Next {
         };
         let (kind, rest) = s.split_once(':').unwrap_or((s, ""));
         let device = |id: &str, page: fn(String) -> AccountPage| {
-            if is_device_id(id) {
+            if is_device_ref(id) {
                 Next::Account(page(id.to_owned()))
             } else {
                 Next::Account(AccountPage::Sessions)
@@ -124,10 +144,14 @@ impl Next {
         })
     }
 
-    /// The path of the sign-in page that comes back here. The encoded form is all
-    /// URL-safe: IDs, codes and device IDs are checked before they become a `Next`.
+    /// The path of the sign-in page that comes back here.
     pub fn login_path(&self, state: &AppState) -> String {
-        state.path(&format!("login?next={}", self.encode()))
+        state.path(&format!("login?next={}", query_value(&self.encode())))
+    }
+
+    /// The path of the registration page that comes back here.
+    pub fn register_path(&self, state: &AppState) -> String {
+        state.path(&format!("register?next={}", query_value(&self.encode())))
     }
 }
 
@@ -154,7 +178,7 @@ fn login_page(
     let register = if state.config.registration {
         format!(
             "<p>No account yet? <a href=\"{}\">Create one</a>.</p>\n",
-            esc(&state.path(&format!("register?next={}", next.encode())))
+            esc(&next.register_path(state))
         )
     } else {
         String::new()
@@ -487,6 +511,7 @@ mod tests {
             AccountPage::Profile,
             AccountPage::Sessions,
             AccountPage::Session("ABC.d~1".into()),
+            AccountPage::Session("a/b+c:d&e=f".into()),
             AccountPage::SignOut("XYZ".into()),
             AccountPage::Password,
             AccountPage::CrossSigning,
@@ -494,10 +519,29 @@ mod tests {
             let n = Next::Account(page);
             assert_eq!(Next::parse(Some(&n.encode())), n);
         }
+        for odd in [
+            "account:session:".to_owned(),
+            format!("account:sign-out:{}", "A".repeat(256)),
+        ] {
+            assert_eq!(
+                Next::parse(Some(&odd)),
+                Next::Account(AccountPage::Sessions),
+                "{odd}"
+            );
+        }
+    }
+
+    #[test]
+    fn next_values_are_encoded_in_paths() {
         assert_eq!(
-            Next::parse(Some("account:session:a/b")),
-            Next::Account(AccountPage::Sessions)
+            query_value("account:session:a/b+c d&e=f%~"),
+            "account:session:a%2Fb%2Bc%20d%26e%3Df%25~"
         );
+        let decoded: Vec<(String, String)> =
+            form_urlencoded::parse(format!("next={}", query_value("x:a+b&c=d")).as_bytes())
+                .into_owned()
+                .collect();
+        assert_eq!(decoded, vec![("next".to_owned(), "x:a+b&c=d".to_owned())]);
     }
 
     #[test]

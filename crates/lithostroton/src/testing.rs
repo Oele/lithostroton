@@ -514,7 +514,8 @@ fn call<T>(r: Result<T, HostError>, what: &str) -> Result<T, ContractViolation> 
 /// creation, token status, refresh rotation with the retry window and replay detection, and
 /// ending sessions. It needs an existing user who may sign in, with their password, and
 /// [`Host::authenticate`] to stand for a request made with an access token. It creates and
-/// ends sessions with device IDs starting `LITHOCHECK`.
+/// ends sessions with device IDs starting `LITHOCHECK`, which hold `+` and `/` as the device IDs
+/// of sign-in with a QR code do.
 pub async fn check_host(
     host: &dyn Host,
     username: &str,
@@ -547,8 +548,9 @@ pub async fn check_host(
         "user() does not find a user who signed in",
     )?;
 
+    // matrix-rust-sdk's QR-code sign-in uses a key in standard base64 as the device ID
     let device = format!(
-        "LITHOCHECK{}",
+        "LITHOCHECK+{}/Q",
         crypto::random_id()[..8]
             .to_ascii_uppercase()
             .replace(['-', '_'], "X")

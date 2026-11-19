@@ -65,6 +65,57 @@ async fn overview_needs_sign_in() {
     assert!(page.body.contains("Sessions"));
 }
 
+/// Device IDs with characters that mean something in a query (`+`, `/`, `&`, `=`) survive the
+/// way through sign-in and back.
+#[tokio::test]
+async fn deep_links_keep_device_ids_with_query_characters() {
+    const DEVICE: &str = "ab+c/d&e=f";
+    const ENCODED: &str = "ab%2Bc%2Fd%26e%3Df";
+    let lab = Lab::new().await;
+    let client_id = lab.register_web().await;
+    lab.sign_in(&client_id, DEVICE).await;
+    lab.sign_in(&client_id, "LAPTOP02").await;
+
+    let mut b = lab.browser();
+    let r = b
+        .get(&format!(
+            "account/?action=org.matrix.device_delete&device_id={ENCODED}"
+        ))
+        .await;
+    assert!(
+        r.location()
+            .ends_with(&format!("/account/sign-out?device_id={ENCODED}")),
+        "{}",
+        r.location()
+    );
+    let r = b.get(&r.location()).await;
+    assert!(
+        r.location()
+            .contains(&format!("/login?next=account:sign-out:{ENCODED}")),
+        "{}",
+        r.location()
+    );
+    let r = b.login(&r.location(), "alice", PASSWORD).await;
+    assert!(
+        r.location()
+            .ends_with(&format!("/account/sign-out?device_id={ENCODED}")),
+        "{}",
+        r.location()
+    );
+    let page = b.get(&r.location()).await;
+    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+    assert!(page.body.contains("ab+c/d&amp;e=f"), "{}", page.body);
+    let csrf = form_csrf(&page, "account/sign-out");
+    let r = b
+        .post(
+            "account/sign-out",
+            &[("csrf", &csrf), ("device_id", DEVICE)],
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::SEE_OTHER, "{}", r.body);
+    assert_eq!(lab.host.device_ids(&lab.alice), vec!["LAPTOP02"]);
+}
+
 #[tokio::test]
 async fn device_delete_deep_link_signs_in_and_comes_back() {
     let lab = Lab::new().await;
@@ -145,6 +196,10 @@ async fn actions_lead_to_their_pages() {
         ("action=org.matrix.device_view", "/account/sessions"),
         (
             "action=org.matrix.device_delete&device_id=a/b",
+            "/account/sign-out?device_id=a%2Fb",
+        ),
+        (
+            "action=org.matrix.device_delete&device_id=",
             "/account/sessions",
         ),
         (

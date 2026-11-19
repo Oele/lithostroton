@@ -21,9 +21,8 @@ use crate::{
     form::Params,
     host::{Device, HostError},
     http_util::{Csrf, MONTHS, Peer, check_form, civil, see_other},
-    login::{AccountPage, Next, bad_form, host_failed, unavailable, username_key},
+    login::{AccountPage, Next, bad_form, host_failed, is_device_ref, unavailable, username_key},
     pages::{self, Page, alert, esc, hidden},
-    scope::is_device_id,
     session::{self, Current},
     state::AppState,
 };
@@ -112,7 +111,7 @@ pub(crate) async fn overview(
     headers: HeaderMap,
     Query(q): Query<AccountQuery>,
 ) -> Response {
-    let device = q.device_id.filter(|d| is_device_id(d));
+    let device = q.device_id.filter(|d| is_device_ref(d));
     let target = match (q.action.as_deref(), device) {
         (Some("org.matrix.profile"), _) => Some(AccountPage::Profile),
         (Some("org.matrix.devices_list"), _) => Some(AccountPage::Sessions),
@@ -358,7 +357,7 @@ pub(crate) async fn session_view(
     headers: HeaderMap,
     Query(q): Query<DeviceQuery>,
 ) -> Response {
-    let Some(device_id) = q.device_id.filter(|d| !d.is_empty() && d.len() <= 255) else {
+    let Some(device_id) = q.device_id.filter(|d| is_device_ref(d)) else {
         return see_other(&account_path(&state, AccountPage::Sessions));
     };
     let current = match signed_in(&state, &headers, AccountPage::Session(device_id.clone())).await {
@@ -390,7 +389,7 @@ pub(crate) async fn sign_out_form(
     headers: HeaderMap,
     Query(q): Query<DeviceQuery>,
 ) -> Response {
-    let Some(device_id) = q.device_id.filter(|d| !d.is_empty() && d.len() <= 255) else {
+    let Some(device_id) = q.device_id.filter(|d| is_device_ref(d)) else {
         return see_other(&account_path(&state, AccountPage::Sessions));
     };
     let current = match signed_in(&state, &headers, AccountPage::SignOut(device_id.clone())).await {

@@ -51,7 +51,7 @@ pub(crate) enum ScopeError {
     NoApi,
     #[error("the scope must include exactly one urn:matrix:client:device:<device_id>")]
     DeviceCount,
-    #[error("the device ID must be 1 to 255 characters of A-Z, a-z, 0-9, '-', '.', '_' and '~'")]
+    #[error("the device ID must be 1 to 255 of the characters a scope token allows")]
     DeviceId,
 }
 
@@ -63,14 +63,16 @@ fn is_scope_token(token: &str) -> bool {
             .all(|b| b == 0x21 || (0x23..=0x5B).contains(&b) || (0x5D..=0x7E).contains(&b))
 }
 
-/// Whether `id` is a device ID lithostroton accepts: unreserved characters (RFC 3986 section
-/// 2.3), as the specification asks clients to use.
+/// Whether `id` is a device ID lithostroton accepts for a new session: 1 to 255 characters of a
+/// scope token (RFC 6749 section 3.3).
+///
+/// The specification asks clients to use only unreserved characters (RFC 3986 section 2.3) and
+/// lets the homeserver refuse others, but bounds them by the scope token's characters, and
+/// clients use more: matrix-rust-sdk's sign-in with a QR code makes the device ID from a
+/// Curve25519 key in standard base64, with `+` and `/`. The homeserver already takes any string
+/// as a device ID at legacy login, so these characters are nothing new to it.
 pub(crate) fn is_device_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= MAX_DEVICE_ID
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~'))
+    id.len() <= MAX_DEVICE_ID && is_scope_token(id)
 }
 
 /// Parses the scope a client asks for at login (authorization request, device
@@ -158,6 +160,25 @@ mod tests {
     }
 
     #[test]
+    fn base64_device_ids() {
+        // matrix-rust-sdk's QR-code sign-in: a Curve25519 key in unpadded standard base64
+        for id in [
+            "l9ib+4uuYRsOD0pQS/q8xMz3uvJJ5ihdxS4NdaLL4hc",
+            "AbC/dE+fG=",
+            "a:b!$&'()*,;=",
+        ] {
+            let s = parse_login_scope(&format!(
+                "urn:matrix:client:api:* urn:matrix:client:device:{id}"
+            ))
+            .unwrap();
+            assert_eq!(s.device_id, id);
+        }
+        for id in ["", "a\\b", "a\"b", "caf\u{e9}", "a\tb", " a"] {
+            assert!(!is_device_id(id), "{id:?}");
+        }
+    }
+
+    #[test]
     fn both_forms_of_one_device_are_one_device() {
         let s = parse_login_scope(
             "urn:matrix:client:api:* urn:matrix:client:device:X1 urn:matrix:org.matrix.msc2967.client:device:X1",
@@ -179,10 +200,6 @@ mod tests {
             ),
             (
                 "urn:matrix:client:api:* urn:matrix:client:device:",
-                DeviceId,
-            ),
-            (
-                "urn:matrix:client:api:* urn:matrix:client:device:a/b",
                 DeviceId,
             ),
             (

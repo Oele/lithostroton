@@ -666,6 +666,54 @@ async fn device_authorization_flow() {
     assert_eq!(r.status, StatusCode::NOT_FOUND);
 }
 
+/// matrix-rust-sdk's sign-in with a QR code makes the device ID from a Curve25519 key in
+/// unpadded standard base64, so it can hold `+` and `/`, which the scope token allows.
+#[tokio::test]
+async fn base64_device_ids_from_qr_code_sign_in() {
+    const QR_DEVICE: &str = "l9ib+4uuYRsOD0pQS/q8xMz3uvJJ5ihdxS4NdaLL4hc";
+    let lab = Lab::new().await;
+    let client_id = lab.register_web().await;
+    let d = device_authorize(&lab, &client_id, QR_DEVICE).await;
+    let page_uri = d["verification_uri_complete"].as_str().unwrap();
+    let mut b = lab.browser();
+    let r = b.get(page_uri).await;
+    let r = b.login(&r.location(), "alice", PASSWORD).await;
+    let page = b.get(&r.location()).await;
+    assert!(
+        page.body.contains(QR_DEVICE),
+        "the page shows the device ID"
+    );
+    let r = answer_device(&mut b, page_uri, "allow").await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    lab.clock.advance(std::time::Duration::from_secs(5));
+    let r = poll(&lab, &client_id, d["device_code"].as_str().unwrap()).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    let t = r.json();
+    assert_eq!(t["scope"], scope(QR_DEVICE));
+    assert_eq!(
+        lab.host.whoami(t["access_token"].as_str().unwrap()),
+        Some((lab.alice.clone(), QR_DEVICE.to_owned()))
+    );
+
+    // and in the authorization code grant, with a refresh after it
+    let other = "AbC/dE+fG=";
+    let t = lab.sign_in(&client_id, other).await;
+    assert_eq!(t["scope"], scope(other));
+    let r = lab
+        .token(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", t["refresh_token"].as_str().unwrap()),
+            ("client_id", &client_id),
+        ])
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert_eq!(r.json()["scope"], scope(other));
+    assert_eq!(
+        lab.host.whoami(r.json()["access_token"].as_str().unwrap()),
+        Some((lab.alice.clone(), other.to_owned()))
+    );
+}
+
 #[tokio::test]
 async fn device_code_entry_by_hand() {
     let lab = Lab::new().await;

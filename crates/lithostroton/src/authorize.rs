@@ -291,7 +291,7 @@ pub(crate) async fn authorize(
     }
     let next = Next::Authorize(id);
     if create {
-        return see_other(&state.path(&format!("register?next={}", next.encode())));
+        return see_other(&next.register_path(&state));
     }
     if current.is_none() || prompts.contains(&"login") {
         let mut path = next.login_path(&state);

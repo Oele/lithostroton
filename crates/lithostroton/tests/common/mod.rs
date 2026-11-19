@@ -196,6 +196,7 @@ impl Lab {
             lab: self,
             cookies: HashMap::new(),
             ip: "192.0.2.10".into(),
+            referrer_policy: String::new(),
         }
     }
 
@@ -330,11 +331,25 @@ pub fn callback_params(location: &str) -> HashMap<String, String> {
         .collect()
 }
 
-/// A browser: a cookie jar, an address, and same-origin form posts.
+/// A browser: a cookie jar, an address, and same-origin form posts with the `Origin` header a
+/// browser sends under the referrer policy of the last page.
 pub struct Browser<'a> {
     pub lab: &'a Lab,
     pub cookies: HashMap<String, String>,
     pub ip: String,
+    /// The referrer policy of the last page loaded: its `<meta name="referrer">`, else its
+    /// `Referrer-Policy` header; empty for the browsers' default.
+    pub referrer_policy: String,
+}
+
+/// The `Origin` of a same-origin form post (Fetch, "append a request `Origin` header"): `null`
+/// under `no-referrer`, the page's origin under every other policy (https to https).
+pub fn form_post_origin(referrer_policy: &str) -> &'static str {
+    if referrer_policy == "no-referrer" {
+        "null"
+    } else {
+        ORIGIN
+    }
 }
 
 impl Browser<'_> {
@@ -344,6 +359,23 @@ impl Browser<'_> {
             .map(|(k, v)| format!("{k}={v}"))
             .collect::<Vec<_>>()
             .join("; ")
+    }
+
+    /// Takes the referrer policy of a page: the last token of its header, then its meta tag.
+    fn keep_referrer_policy(&mut self, r: &Resp) {
+        let html = r
+            .header("content-type")
+            .is_some_and(|t| t.starts_with("text/html"));
+        if !html {
+            return;
+        }
+        self.referrer_policy = r
+            .header("referrer-policy")
+            .and_then(|h| h.rsplit(',').next().map(|t| t.trim().to_owned()))
+            .unwrap_or_default();
+        if let Some(meta) = r.body.split("<meta name=\"referrer\" content=\"").nth(1) {
+            self.referrer_policy = meta.split('"').next().unwrap_or_default().to_owned();
+        }
     }
 
     fn keep_cookies(&mut self, r: &Resp) {
@@ -369,14 +401,17 @@ impl Browser<'_> {
             .unwrap();
         let r = self.lab.request(req).await;
         self.keep_cookies(&r);
+        self.keep_referrer_policy(&r);
         r
     }
 
+    /// A form post from the last page loaded.
     pub async fn post(&mut self, p: &str, fields: &[(&str, &str)]) -> Resp {
+        let origin = form_post_origin(&self.referrer_policy);
         self.post_with(
             p,
             fields,
-            &[("origin", ORIGIN), ("sec-fetch-site", "same-origin")],
+            &[("origin", origin), ("sec-fetch-site", "same-origin")],
         )
         .await
     }
@@ -401,6 +436,7 @@ impl Browser<'_> {
             .request(req.body(Body::from(form(fields))).unwrap())
             .await;
         self.keep_cookies(&r);
+        self.keep_referrer_policy(&r);
         r
     }
 

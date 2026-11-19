@@ -101,9 +101,13 @@ fn csrf_token(state: &AppState, cookie: &str, purpose: &str) -> String {
     )
 }
 
+/// The referrer policy of every response, and of every page's `<meta name="referrer">`.
+pub(crate) const REFERRER_POLICY: &str = "same-origin";
+
 /// Checks a form submission: it comes from a page of ours (`Origin`, `Sec-Fetch-Site` when
 /// the browser sends them), and carries the CSRF token of the browser's cookie for this
-/// `purpose`.
+/// `purpose`. `Origin: null` is refused: our pages' referrer policy has browsers send their
+/// origin, and a sandboxed frame elsewhere sends `null`.
 pub(crate) fn check_form(
     state: &AppState,
     headers: &HeaderMap,
@@ -144,8 +148,12 @@ pub(crate) fn page_csp(forms_redirect_out: bool) -> HeaderValue {
     }
 }
 
-/// The headers every response gets: no framing, no sniffing, no referrer, and not stored by
-/// caches unless the handler said otherwise.
+/// The headers every response gets: no framing, no sniffing, no referrer to other sites, and
+/// not stored by caches unless the handler said otherwise.
+///
+/// The referrer policy is `same-origin`, not `no-referrer`: under `no-referrer` browsers send
+/// `Origin: null` with a page's own form posts (Fetch, "append a request `Origin` header"), and
+/// [`check_form`] refuses those.
 pub(crate) async fn security_headers(req: Request, next: Next) -> Response {
     let mut resp = next.run(req).await;
     let h = resp.headers_mut();
@@ -156,7 +164,7 @@ pub(crate) async fn security_headers(req: Request, next: Next) -> Response {
     );
     h.insert(
         header::REFERRER_POLICY,
-        HeaderValue::from_static("no-referrer"),
+        HeaderValue::from_static(REFERRER_POLICY),
     );
     if !h.contains_key(header::CONTENT_SECURITY_POLICY) {
         h.insert(

@@ -57,7 +57,7 @@ impl Page {
         let html = format!(
             "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
              <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-             <meta name=\"referrer\" content=\"no-referrer\">\n\
+             <meta name=\"referrer\" content=\"{referrer}\">\n\
              <title>{title} · {server}</title>\n\
              <link rel=\"stylesheet\" href=\"{css}\">\n</head>\n<body>\n\
              <header><p class=\"server\">{server}</p></header>\n\
@@ -65,6 +65,7 @@ impl Page {
             title = esc(&self.title),
             server = esc(&state.config.server_name),
             css = esc(&state.path("assets/style.css")),
+            referrer = crate::http_util::REFERRER_POLICY,
             body = self.body,
         );
         let mut resp = (self.status, html).into_response();

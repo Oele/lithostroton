@@ -423,7 +423,8 @@ async fn every_response_forbids_framing_and_sniffing() {
             r.header("x-content-type-options").as_deref(),
             Some("nosniff")
         );
-        assert_eq!(r.header("referrer-policy").as_deref(), Some("no-referrer"));
+        // not no-referrer: under it browsers send `Origin: null` with our own form posts
+        assert_eq!(r.header("referrer-policy").as_deref(), Some("same-origin"));
     }
     for page in [&consent, &login, &link] {
         let csp = page.header("content-security-policy").unwrap();

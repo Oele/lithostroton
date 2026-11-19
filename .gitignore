@@ -1,0 +1,5 @@
+/target
+.env
+/.claude/worktrees/
+# the agent brief: internal, not part of the public repository
+/BRIEF.md

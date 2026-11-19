@@ -1,0 +1,7 @@
+lithostroton
+Copyright 2026 The lithostroton authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+lithostroton is written from the Matrix specification (the OAuth 2.0 API of the
+Client-Server API), the Matrix spec proposals behind it, and the IETF RFCs it names.

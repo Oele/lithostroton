@@ -1,0 +1,76 @@
+# lithostroton
+
+An OAuth 2.0 authorization server for Matrix homeservers, in Rust, built to run inside the
+homeserver's own process. It implements the
+[OAuth 2.0 API](https://spec.matrix.org/latest/client-server-api/#oauth-20-api) of the Matrix
+Client-Server specification (v1.15 and later): the sign-in, consent, token and device
+authorization side of it.
+
+λιθόστρωτον, "paved with stones": the Greek word for a mosaic floor.
+
+## What it does
+
+- Authorization server metadata (RFC 8414) for `GET /_matrix/client/v1/auth_metadata`.
+- Dynamic client registration (RFC 7591) with the Matrix rules for client metadata and
+  redirect URIs, including native apps' loopback and private-use-scheme redirects (RFC 8252).
+  Registrations with the same metadata share one client ID.
+- The authorization code grant with PKCE S256 (RFC 7636), always; exact redirect URI
+  matching; single-use codes bound to client, redirect URI and challenge; `query` and
+  `fragment` response modes; `iss` in the response (RFC 9207); `prompt=create`, `prompt=login`,
+  `prompt=none`; `login_hint` (`mxid:`).
+- Refresh tokens with rotation, a retry window for lost responses, and replay detection.
+- Token revocation (RFC 7009): revoking either token ends the session.
+- The device authorization grant (RFC 8628): user codes, polling interval, `slow_down`,
+  expiry.
+- Scopes `urn:matrix:client:api:*` and `urn:matrix:client:device:<device_id>`, and their
+  unstable MSC2967 forms.
+- Sign-in, registration and consent pages in plain, accessible HTML without scripts. The
+  client's name and website are shown as unverified.
+
+Planned: the rendezvous of sign-in with a QR code (MSC4388, used by MSC4108), and the account
+management pages (sessions, display name, password, cross-signing reset).
+
+## How it fits in a homeserver
+
+The homeserver owns users, devices and tokens. It implements the `Host` trait: check a
+password, create a device with an access token and a refresh token, report what a token is,
+refresh, end a session, list devices, and a few more. lithostroton keeps no copies, and since
+the homeserver issues the tokens, its own token check accepts them.
+
+lithostroton's own state (registered clients, sign-ins in progress, browser sessions) goes in a
+`Store`: a small key-value interface a homeserver keeps in one table of its database, or
+`MemoryStore`.
+
+```rust
+let config = lithostroton::Config::new(
+    "https://matrix.example.org/_lithostroton/".parse()?,
+    "example.org",
+);
+let oauth = lithostroton::Embedded::start(config, host, store).await?;
+
+let app = axum::Router::new()
+    .nest("/_lithostroton", oauth.router())
+    // and serve oauth.metadata() at /_matrix/client/v1/auth_metadata
+    ;
+```
+
+`lithostroton::testing` (feature `testing`) has an in-memory `Host` and `check_host`, a suite
+of checks a homeserver can run against its own `Host` implementation.
+
+## Security
+
+Written to RFC 9700 (OAuth 2.0 Security Best Current Practice): no implicit grant, no open
+redirects, PKCE S256 always, CSRF tokens on every form, `frame-ancestors 'none'`,
+`Secure`/`HttpOnly`/`SameSite` cookies, constant-time comparisons, rate limits on password
+checks and token requests, secrets stored as digests, nothing secret in logs. Each rule has a
+test in `crates/lithostroton/tests/`.
+
+## Origin
+
+lithostroton is written from the Matrix specification, the MSCs behind it and the IETF RFCs. It
+contains no code from other implementations of this API, and uses only permissively licensed
+libraries.
+
+## Licence
+
+Apache License, Version 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
